@@ -13,13 +13,30 @@
         /**
          * 🛠️ CONFIGURATION HUB
          */
-        const hardcodedConfig = null; // Paste your Firebase Web Config here
         
-        // 🔑 THE SYNC KEY: Updated to your specific vault ID
-        // This ensures every device using this link sees the same data.
+        // Paste your Firebase Config values here
+        const myConfig = {
+            apiKey: "AIzaSyBoOiq5Kx6fImo4uaEbJu4cF1Cix1-Qiok",
+            authDomain: "mom-links.firebaseapp.com",
+            projectId: "mom-links",
+            storageBucket: "mom-links.firebasestorage.app",
+            messagingSenderId: "74443422340",
+            appId: "1:74443422340:web:63eb4ac9c3f1fe99b060d1",
+            measurementId: "G-1QN8V775R2"
+        };
+        
+        // Environment fallback logic: Always prioritize the internal environment config if available
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : myConfig;
+        
+        if (!firebaseConfig || !firebaseConfig.apiKey) {
+            console.error("Firebase configuration is missing! Please check the hardcodedConfig section.");
+        }
+
+        // 🔑 THE SYNC KEY
         const globalVaultId = "mom-hg-99"; 
 
-        const firebaseConfig = hardcodedConfig || JSON.parse(__firebase_config);
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
@@ -28,7 +45,7 @@
         let bookmarks = [];
         let currentCategory = 'All';
         let isCompact = false;
-        let userId = globalVaultId; // Using the Vault ID for cross-device sync
+        let userId = globalVaultId; 
 
         const dom = {
             list: document.getElementById('bookmarkList'),
@@ -39,23 +56,29 @@
 
         const initAuth = async () => {
             try {
-                // We still sign in to get permission, but we use our Global ID for the data path
+                // IMPORTANT: Ensure Anonymous Auth is enabled in your Firebase Console for myConfig to work on GitHub
                 await signInAnonymously(auth);
                 dom.authStatus.innerText = "☁️ Vault Connected";
                 dom.authStatus.className = "text-[9px] font-bold text-emerald-500 uppercase tracking-widest";
                 listenForData();
             } catch (e) {
                 dom.authStatus.innerText = "⚠️ Connection Offline";
+                console.error("Auth Error:", e);
+                // Tip: If you see auth/configuration-not-found on your GitHub site, 
+                // you must enable 'Anonymous' Sign-in provider in your Firebase Auth console.
             }
         };
 
         const listenForData = () => {
-            // Path: artifacts -> appId -> users -> globalVaultId -> bookmarks
+            if (!auth.currentUser) return;
             const colPath = collection(db, 'artifacts', appId, 'users', userId, 'bookmarks');
             onSnapshot(colPath, (snapshot) => {
                 bookmarks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 render();
-            }, (err) => console.error("Database Error:", err));
+            }, (err) => {
+                console.error("Database Error:", err);
+                dom.authStatus.innerText = "⚠️ Database Error";
+            });
         };
 
         window.saveBookmark = async () => {
@@ -64,7 +87,7 @@
             const cat = document.getElementById('newCat').value;
             const note = document.getElementById('newNote').value;
 
-            if (!name || !urlInput) return;
+            if (!name || !urlInput || !auth.currentUser) return;
             const url = urlInput.startsWith('http') ? urlInput : 'https://' + urlInput;
 
             const colPath = collection(db, 'artifacts', appId, 'users', userId, 'bookmarks');
@@ -77,6 +100,7 @@
         };
 
         window.deleteLink = async (id) => {
+            if (!auth.currentUser) return;
             const docRef = doc(db, 'artifacts', appId, 'users', userId, 'bookmarks', id);
             await deleteDoc(docRef);
         };
