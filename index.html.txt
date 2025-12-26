@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mom's Cloud Command Center v2.2</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, deleteDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        /**
+         * 🛠️ GITHUB / STANDALONE SETUP
+         * PASTE YOUR FIREBASE WEB CONFIG BELOW
+         */
+        const hardcodedConfig = null; 
+
+        const firebaseConfig = hardcodedConfig || JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'mom-command-center';
+
+        // State
+        let bookmarks = [];
+        let currentCategory = 'All';
+        let isCompact = false;
+        let currentUser = null;
+
+        // Dom Elements
+        const dom = {
+            list: document.getElementById('bookmarkList'),
+            search: document.getElementById('searchInput'),
+            modal: document.getElementById('addModal'),
+            authStatus: document.getElementById('authStatus')
+        };
+
+        // --- AUTH ---
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (e) {
+                dom.authStatus.innerText = "⚠️ Connection Error";
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                dom.authStatus.innerText = "☁️ Cloud Synced";
+                dom.authStatus.className = "text-[9px] font-bold text-emerald-500 uppercase tracking-widest";
+                listenForData();
+            }
+        });
+
+        // --- FIRESTORE ---
+        const listenForData = () => {
+            if (!currentUser) return;
+            const colPath = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'bookmarks');
+            onSnapshot(colPath, (snapshot) => {
+                bookmarks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                render();
+            }, (err) => console.error("Sync Error", err));
+        };
+
+        window.saveBookmark = async () => {
+            const name = document.getElementById('newName').value;
+            const urlInput = document.getElementById('newUrl').value;
+            const cat = document.getElementById('newCat').value;
+            const note = document.getElementById('newNote').value;
+
+            if (!name || !urlInput || !currentUser) return;
+            const url = urlInput.startsWith('http') ? urlInput : 'https://' + urlInput;
+
+            const colPath = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'bookmarks');
+            await addDoc(colPath, { name, url, cat, note, created: Date.now() });
+            
+            toggleAddModal();
+            document.getElementById('newName').value = '';
+            document.getElementById('newUrl').value = '';
+            document.getElementById('newNote').value = '';
+        };
+
+        window.deleteLink = async (id) => {
+            if (!currentUser) return;
+            const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'bookmarks', id);
+            await deleteDoc(docRef);
+        };
+
+        // --- UI LOGIC ---
+        window.render = () => {
+            const searchVal = dom.search.value.toLowerCase();
+            dom.list.innerHTML = '';
+
+            const filtered = bookmarks.sort((a,b) => b.created - a.created).filter(b => {
+                const matchesSearch = b.name.toLowerCase().includes(searchVal) || (b.note && b.note.toLowerCase().includes(searchVal));
+                const matchesCat = currentCategory === 'All' || b.cat === currentCategory;
+                return matchesSearch && matchesCat;
+            });
+
+            if (filtered.length === 0) {
+                dom.list.innerHTML = `<div class="text-center py-20 text-slate-400 italic text-sm">No shortcuts found.</div>`;
+            }
+
+            filtered.forEach(b => {
+                const div = document.createElement('div');
+                div.className = `bookmark-item bg-white border border-slate-100 rounded-xl transition-all cursor-pointer group animate-in shadow-sm hover:border-blue-300 ${isCompact ? 'p-2' : 'p-4'}`;
+                
+                if (isCompact) {
+                    div.innerHTML = `
+                        <div class="flex justify-between items-center">
+                            <div onclick="window.open('${b.url}', '_blank')" class="flex-1 truncate">
+                                <span class="text-[10px] font-bold text-blue-500 mr-2">${b.cat[0]}</span>
+                                <span class="font-bold text-slate-800 text-xs">${b.name}</span>
+                            </div>
+                            <button onclick="deleteLink('${b.id}')" class="text-slate-300 hover:text-rose-500 px-2 font-bold">✕</button>
+                        </div>
+                    `;
+                } else {
+                    div.innerHTML = `
+                        <div class="flex justify-between items-start">
+                            <div onclick="window.open('${b.url}', '_blank')" class="flex-1">
+                                <div class="text-[9px] font-bold text-blue-500 uppercase tracking-tighter mb-1">${b.cat}</div>
+                                <h3 class="font-bold text-slate-800 text-sm leading-tight group-hover:text-blue-600">${b.name}</h3>
+                                <p class="text-[10px] text-slate-400 truncate mt-1">${b.url.replace('https://', '')}</p>
+                                ${b.note ? `<div class="bg-yellow-50 p-2 rounded-lg mt-3 italic text-slate-600 text-[11px] border border-yellow-100">📌 ${b.note}</div>` : ''}
+                            </div>
+                            <button onclick="deleteLink('${b.id}')" class="text-slate-300 hover:text-rose-500 p-1 opacity-0 group-hover:opacity-100 font-bold">✕</button>
+                        </div>
+                    `;
+                }
+                dom.list.appendChild(div);
+            });
+            document.getElementById('linkCount').innerText = `${bookmarks.length} Cloud Shortcuts`;
+        };
+
+        window.setCategory = (cat) => {
+            currentCategory = cat;
+            document.querySelectorAll('nav button').forEach(btn => {
+                btn.className = "px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap text-slate-500 hover:bg-slate-200 transition-colors";
+            });
+            document.getElementById('tab' + cat).className = "px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap bg-blue-600 text-white shadow-md";
+            render();
+        };
+
+        window.toggleCompact = () => {
+            isCompact = !isCompact;
+            const btn = document.getElementById('compactToggle');
+            btn.innerText = isCompact ? "Standard View" : "Mini View";
+            btn.classList.toggle('bg-slate-800');
+            render();
+        };
+
+        window.toggleAddModal = () => dom.modal.classList.toggle('hidden');
+
+        document.getElementById('newUrl').addEventListener('input', (e) => {
+            const val = e.target.value.toLowerCase();
+            const select = document.getElementById('newCat');
+            if (val.includes('survey') || val.includes('opinion') || val.includes('junkie')) {
+                select.value = 'Surveys';
+            } else if (val.includes('amazon') || val.includes('kohl') || val.includes('shop')) {
+                select.value = 'Shopping';
+            }
+        });
+
+        initAuth();
+        window.filterLinks = render;
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { background-color: #f1f5f9; font-family: 'Inter', sans-serif; height: 100vh; overflow: hidden; }
+        .sidebar-container { width: 100%; max-width: 450px; margin: 0 auto; height: 100vh; background: #fff; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeIn 0.3s ease-out forwards; }
+    </style>
+</head>
+<body>
+
+    <div id="appContainer" class="sidebar-container shadow-2xl">
+        <header class="p-4 border-b border-slate-100 bg-white z-10">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h1 class="text-lg font-bold text-slate-800 leading-tight">Mom's Command</h1>
+                    <div id="authStatus" class="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Connecting...</div>
+                </div>
+                <div class="flex gap-2">
+                    <button id="compactToggle" onclick="toggleCompact()" class="text-[10px] font-bold bg-slate-200 text-slate-600 px-3 py-1 rounded-full hover:bg-slate-300">Mini</button>
+                    <button onclick="toggleAddModal()" class="bg-blue-600 hover:bg-blue-700 text-white w-8 h-8 rounded-full font-bold shadow-lg flex items-center justify-center transition-transform active:scale-90">+</button>
+                </div>
+            </div>
+            <div class="relative">
+                <input type="text" id="searchInput" oninput="filterLinks()" placeholder="Search links or notes..." 
+                    class="w-full bg-slate-100 border-none rounded-xl p-3 text-sm outline-none focus:ring-2 focus:ring-blue-400">
+            </div>
+        </header>
+
+        <nav class="flex overflow-x-auto p-3 gap-2 bg-slate-50 border-b border-slate-100 no-scrollbar">
+            <button onclick="setCategory('All')" id="tabAll" class="px-4 py-1.5 rounded-full text-xs font-bold bg-blue-600 text-white shadow-md">All</button>
+            <button onclick="setCategory('Surveys')" id="tabSurveys" class="px-4 py-1.5 rounded-full text-xs font-bold text-slate-500 hover:bg-slate-200">Surveys</button>
+            <button onclick="setCategory('Daily')" id="tabDaily" class="px-4 py-1.5 rounded-full text-xs font-bold text-slate-500 hover:bg-slate-200">Daily</button>
+            <button onclick="setCategory('Shopping')" id="tabShopping" class="px-4 py-1.5 rounded-full text-xs font-bold text-slate-500 hover:bg-slate-200">Shopping</button>
+            <button onclick="setCategory('Archive')" id="tabArchive" class="px-4 py-1.5 rounded-full text-xs font-bold text-slate-500 hover:bg-slate-200">Archive</button>
+        </nav>
+
+        <main id="bookmarkList" class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/30">
+            <div class="text-center py-20 text-slate-400 italic text-sm">Initializing Cloud Sync...</div>
+        </main>
+
+        <footer class="p-3 bg-white border-t border-slate-100 flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span id="linkCount">Syncing...</span>
+            </div>
+            <span>MUKILTEO HQ v2.2</span>
+        </footer>
+    </div>
+
+    <div id="addModal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-sm p-8 shadow-2xl animate-in">
+            <h2 class="text-2xl font-bold mb-6 text-slate-800">New Shortcut</h2>
+            <div class="space-y-5">
+                <div>
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Display Name</label>
+                    <input type="text" id="newName" placeholder="e.g. Swagbucks" class="w-full bg-slate-50 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                </div>
+                <div>
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">URL Address</label>
+                    <input type="text" id="newUrl" placeholder="www.website.com" class="w-full bg-slate-50 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Group</label>
+                        <select id="newCat" class="w-full bg-slate-50 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                            <option>Surveys</option>
+                            <option>Daily</option>
+                            <option>Shopping</option>
+                            <option>Archive</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sticky Note</label>
+                        <input type="text" id="newNote" placeholder="Hint..." class="w-full bg-slate-50 border-none rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                    </div>
+                </div>
+            </div>
+            <div class="flex gap-3 mt-10">
+                <button onclick="toggleAddModal()" class="flex-1 py-4 text-slate-400 font-bold text-sm">Cancel</button>
+                <button onclick="saveBookmark()" class="flex-2 px-8 py-4 bg-blue-600 text-white rounded-2xl font-bold text-sm shadow-xl shadow-blue-200 transition-transform active:scale-95">Save to Cloud</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
